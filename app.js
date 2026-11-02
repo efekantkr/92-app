@@ -231,9 +231,10 @@ function sunTimes(s){ // Sonnenauf-/untergang in Minuten Ortszeit (NOAA-Näherun
   return (sunCache[s] = {rise: calc(true), set: calc(false)});
 }
 function sunset(s){ const w = db.wetter.days[s]; return w?.sunset ? toMin(w.sunset.slice(11, 16)) : sunTimes(s).set; }
-function schichtFuer(s){
+function schichtFuer(s, roh){
   const sc = S().schicht; if (!sc.aktiv) return null;
   const d = dLocal(s), wd = d.getDay();
+  if (!roh && sc.frei && sc.frei[s] && wd !== 5 && wd !== 0) return {typ: 'frei', manuell: true, label: 'Frei 🌴'};
   if (wd === 5 || wd === 0) return {typ: 'frei', label: wd === 5 ? 'Frei (Freitag)' : 'Sonntag'};
   const mon = new Date(d); mon.setDate(d.getDate() - ((wd + 6) % 7));
   const weeks = Math.round((mon - dLocal(sc.refMonday)) / (7 * 864e5));
@@ -564,8 +565,8 @@ VIEWS.start = () => {
   ${ziel ? `<div class="progress"><i style="width:${clamp(ums / ziel * 100, 0, 100)}%"></i>${pg && pg.basis > ums ? `<i class="ghost" style="width:${clamp((pg.basis - ums) / ziel * 100, 0, 100 - clamp(ums / ziel * 100, 0, 100))}%"></i>` : ''}</div>` : ''}
   <div class="mini3"><span><b>${mon.length}</b> Aufträge</span><span><b>${md.n ? eur(md.lohn, 0) : '–'}</b> Gewinn/Std.</span><span><b>${pg ? eur(pg.tempo ?? pg.basis, 0) : '–'}</b> Prognose</span></div>
   ${unbezahlt.length ? `<div class="meta amber">💶 ${unbezahlt.length} erledigt, noch nicht bezahlt: ${eur(unbezahlt.reduce((s, a) => s + preis(a), 0))}</div>` : ''}</button>`;
-  html += `<div class="label">Heute${S().schicht.aktiv ? ` <span class="muted lbl-extra">${esc(schichtFuer(todayIso())?.label || '')}</span>` : ''}</div>` + (heute.length ? heute.map(a => terminItem(a, {route: true})).join('') : `<div class="card muted">Heute keine Termine.</div>`);
-  html += `<div class="label">Morgen${S().schicht.aktiv ? ` <span class="muted lbl-extra">${esc(schichtFuer(todayIso(1))?.label || '')}</span>` : ''}</div>`;
+  html += `<div class="label">Heute${S().schicht.aktiv ? ` <span class="muted lbl-extra">${esc(schichtFuer(todayIso())?.label || '')}</span>${freiKnopf(todayIso(), 'lbl-btn')}` : ''}</div>` + (heute.length ? heute.map(a => terminItem(a, {route: true})).join('') : `<div class="card muted">Heute keine Termine.</div>`);
+  html += `<div class="label">Morgen${S().schicht.aktiv ? ` <span class="muted lbl-extra">${esc(schichtFuer(todayIso(1))?.label || '')}</span>${freiKnopf(todayIso(1), 'lbl-btn')}` : ''}</div>`;
   if (rem.length) html += `<button class="btn ${remOffen ? 'pri' : ''}" style="width:100%;margin-bottom:10px" data-act="reminders">🔔 ${remOffen ? `${remOffen} Kunde${remOffen > 1 ? 'n' : ''} für morgen erinnern` : 'Alle für morgen erinnert ✓'}</button>`;
   html += morgen.length ? morgen.map(a => terminItem(a, {route: true})).join('') : `<div class="card muted">Morgen keine Termine.</div>`;
   const bew = db.auftraege.filter(a => UMSATZ_STATUS.has(a.status) && a.datum >= todayIso(-10) && a.datum <= todayIso() && !a.bewertung).sort(byDateDesc);
@@ -624,13 +625,21 @@ VIEWS.kalender = () => {
   <div class="btns"><button class="btn" data-act="icsAll">Alle kommenden Termine exportieren</button></div></div>`;
 };
 
+// Knopf "Frei" / "Doch Schicht" für einen Tag, nur an Tagen mit Schicht laut Plan.
+function freiKnopf(s, cls = ''){
+  if (!S().schicht.aktiv || s < todayIso()) return '';
+  const plan = schichtFuer(s, true); if (!plan || plan.typ === 'frei') return '';
+  const frei = !!S().schicht.frei?.[s];
+  return `<button class="btn sm ${frei ? '' : 'pri'} ${cls}" data-act="freiTag" data-v="${s}">${frei ? '↺ Doch Schicht' : '🌴 Hab frei'}</button>`;
+}
 function dayInfoHtml(s){
   const sc = S().schicht.aktiv ? schichtFuer(s) : null, w = wetterTxt(s, true), lk = freieLuecken(s);
   const parts = [];
   if (sc) parts.push(`🏬 ${esc(sc.label)}`);
   parts.push(`🌇 hell bis ca. ${fromMin(sunset(s) + (S().lichtNach || 0))}`);
   if (w) parts.push(w);
-  return `<div class="card small"><div class="day-info">${parts.map(p => `<span>${p}</span>`).join('')}</div>
+  const fk = freiKnopf(s);
+  return `<div class="card small"><div class="day-info">${parts.map(p => `<span>${p}</span>`).join('')}</div>${fk ? `<div class="btns">${fk}</div>` : ''}
   ${s >= todayIso() ? (lk.length ? `<div class="btns">${lk.map(l => `<button class="btn sm slot" data-act="slotTermin" data-v="${s}" data-t="${fromMin(l[0])}">Frei ${fromMin(l[0])}–${fromMin(l[1])}</button>`).join('')}</div>` : `<div class="meta">Keine Lücke ab ${String(S().minStd).replace('.', ',')} Std. bei Tageslicht. Tiefgarage oder Garage mit Licht? Dann geht auch später.</div>`) : ''}</div>`;
 }
 
@@ -1335,6 +1344,10 @@ const ACTIONS = {
   bewertung: el => { const a = auftragById(el.dataset.id), k = kundeById(a.kundeId); sendText(k, msgDanke(a, k)); a.bewertung = new Date().toISOString(); save(); setTimeout(render, 400); },
   slotTermin: el => openAuftrag(null, {preset: {datum: el.dataset.v, zeit: el.dataset.t}}),
   schnellAngebot: () => openAuftrag(null, {title: 'Angebot erstellen', angebot: true}),
+  freiTag: el => { const s = el.dataset.v, sc = S().schicht; sc.frei = sc.frei || {};
+    if (sc.frei[s]) { delete sc.frei[s]; toast('Schicht wieder eingetragen'); } else { sc.frei[s] = true; toast(`${s === todayIso() ? 'Heute' : fmtDate(s)} frei, Zeit ist jetzt verfügbar`); }
+    for (const k of Object.keys(sc.frei)) if (k < todayIso(-60)) delete sc.frei[k];
+    save(); go(null, true); },
   schichtToggle: () => { S().schicht.aktiv = !S().schicht.aktiv; save(); openSettings(); },
   schichtTausch: () => { const sc = S().schicht; sc.refTyp = sc.refTyp === 'frueh' ? 'spaet' : 'frueh'; save(); openSettings(); toast('Schichtplan umgedreht'); },
   setZeit: el => { const f = $('#af'); f.elements.zeit.value = el.dataset.t; readDraftForm(); updateDraftUi(); },

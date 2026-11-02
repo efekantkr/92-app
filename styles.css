@@ -254,3 +254,5 @@ main{padding-bottom:90px}
 .quick .q{flex-direction:column;justify-content:center;text-align:center;gap:7px;padding:12px 6px;font-size:12px}
 .toast{bottom:auto;top:calc(var(--st) + 66px);transform:translate3d(-50%,-10px,0)}
 .toast.show{transform:translate3d(-50%,0,0)}
+
+.lbl-btn{margin-left:auto;padding:4px 10px!important;font-size:12px!important;text-transform:none;letter-spacing:0}

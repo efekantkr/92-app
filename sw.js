@@ -1,5 +1,5 @@
 // Offline-Cache für die 92 App. Bei jedem Update VERSION hochzählen.
-const VERSION = '92app-v1.0.0';
+const VERSION = '92app-v1.1.0';
 const FILES = ['./', './index.html', './app.js', './styles.css', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png',
   './icons/logo.png', './icons/logo-mark.png', './icons/splash-1206x2622.png',
