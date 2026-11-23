@@ -33,15 +33,14 @@ const DEFAULT_SETTINGS = {
   anfahrtAbKm: 110, anfahrtPreis: 40,
   kmKosten: 0.30, material: 6, zielStundenlohn: 25, monatsziel: 650, kmh: 60,
   notif: false, lastBackup: null, googleReview: '',
-  // Obi-Schichtplan: Woche ab refMonday = refTyp, danach wöchentlich abwechselnd. Freitag & Sonntag frei.
-  schicht: {aktiv: true, refMonday: '2026-11-02', refTyp: 'frueh',
-    frueh: {wd: '08:00-17:00', sa: '08:00-14:00'}, spaet: {wd: '11:20-20:00', sa: '14:00-20:00'}},
+  // Feste Arbeitszeiten (seit 23.11.2026): Mo–Fr gleiche Zeit, Samstag (leer = frei), Sonntag immer frei.
+  schicht: {aktiv: true, v: 2, wd: '08:00-16:30', sa: '', frei: {}},
   slotStart: '08:00', puffer: 30, minStd: 2.5, lichtNach: 25, sonntag: false,
   lat: 51.17, lon: 7.08,
   // KI-Assistent
   apiKey: '', assistentLink: 'https://claude.ai/code/project/chan_01D3Bx2bgxHvMmUwzPhrNuqW',
   profil: `Ich bin Efekan und betreibe 92 Aufbereitung (NINETYTWO Aufbereitung): mobile Innenraumaufbereitung in Solingen und Umgebung (bis ca. 60 km). Wir kommen zum Kunden.
-Gestartet im September 2026, Kleingewerbe, nebenberuflich neben dem dualen Studium. Zusätzlich arbeite ich bei Obi im wöchentlichen Wechsel Früh-/Spätschicht, freitags frei.
+Gestartet im September 2026, Kleingewerbe, nebenberuflich neben dem dualen Studium. Zusätzlich arbeite ich Mo–Fr 8:00–16:30, samstags und sonntags habe ich frei.
 Schwerpunkt: Innenraum (Fußräume, Kunststoff, Armaturenbrett, Displays, Sitze, Kofferraum, Scheiben). Ehrliche Handarbeit, keine Garantie auf Fleckentfernung.
 Produkte: Glart Innenreiniger (bitte ergänzen: weitere Reiniger, Maschinen, Sauger …).
 Ziel: langfristig davon leben, später eigene Halle, Mitarbeiter und eigene Produkte.
@@ -76,7 +75,11 @@ function normalize(d){
   const base = emptyDb();
   d = Object.assign(base, d || {});
   d.settings = Object.assign(structuredClone(DEFAULT_SETTINGS), d.settings || {});
-  d.settings.schicht = Object.assign(structuredClone(DEFAULT_SETTINGS.schicht), d.settings.schicht || {});
+  const altSch = d.settings.schicht || {};
+  if (altSch.v !== 2) { // alter Früh/Spät-Wechsel -> feste Zeiten, An/Aus und freie Tage bleiben
+    d.settings.schicht = Object.assign(structuredClone(DEFAULT_SETTINGS.schicht), {aktiv: altSch.aktiv !== false, frei: altSch.frei || {}});
+    if (typeof d.settings.profil === 'string') d.settings.profil = d.settings.profil.replace('Zusätzlich arbeite ich bei Obi im wöchentlichen Wechsel Früh-/Spätschicht, freitags frei.', 'Zusätzlich arbeite ich Mo–Fr 8:00–16:30, samstags und sonntags habe ich frei.');
+  } else d.settings.schicht = Object.assign(structuredClone(DEFAULT_SETTINGS.schicht), altSch);
   if (!d.wetter) d.wetter = {fetched: 0, days: {}};
   if (!Array.isArray(d.chat)) d.chat = [];
   for (const k of ['kunden','auftraege','files','videos','social']) if (!Array.isArray(d[k])) d[k] = [];
@@ -234,15 +237,11 @@ function sunset(s){ const w = db.wetter.days[s]; return w?.sunset ? toMin(w.suns
 function schichtFuer(s, roh){
   const sc = S().schicht; if (!sc.aktiv) return null;
   const d = dLocal(s), wd = d.getDay();
-  if (!roh && sc.frei && sc.frei[s] && wd !== 5 && wd !== 0) return {typ: 'frei', manuell: true, label: 'Frei 🌴'};
-  if (wd === 5 || wd === 0) return {typ: 'frei', label: wd === 5 ? 'Frei (Freitag)' : 'Sonntag'};
-  const mon = new Date(d); mon.setDate(d.getDate() - ((wd + 6) % 7));
-  const weeks = Math.round((mon - dLocal(sc.refMonday)) / (7 * 864e5));
-  const typ = (((weeks % 2) + 2) % 2 === 0) ? sc.refTyp : (sc.refTyp === 'frueh' ? 'spaet' : 'frueh');
-  const range = (wd === 6 ? sc[typ].sa : sc[typ].wd) || '';
-  const [a, b] = range.split('-');
-  if (!a || !b) return {typ, label: typ === 'frueh' ? 'Frühschicht' : 'Spätschicht'};
-  return {typ, von: toMin(a), bis: toMin(b), label: `${typ === 'frueh' ? 'Früh' : 'Spät'} ${a.replace(/^0/, '')}–${b.replace(/^0/, '')}`};
+  if (wd === 0) return {typ: 'frei', label: 'Sonntag'};
+  const [a, b] = ((wd === 6 ? sc.sa : sc.wd) || '').split('-');
+  if (!a || !b) return {typ: 'frei', label: wd === 6 ? 'Samstag frei' : 'Frei'};
+  if (!roh && sc.frei && sc.frei[s]) return {typ: 'frei', manuell: true, label: 'Frei 🌴'};
+  return {typ: 'arbeit', von: toMin(a), bis: toMin(b), label: `Arbeit ${a.replace(/^0/, '')}–${b.replace(/^0/, '')}`};
 }
 function freieLuecken(s){
   const st = S(); if (s < todayIso()) return [];
@@ -536,7 +535,7 @@ function terminItem(a, opts = {}){
     <div class="body"><div class="card-h"><b class="ellipsis">${esc(kName(k))}</b>${scoreHtml(score(a))}</div>
     <div class="meta ellipsis">${esc(paketOf(a).name)} · ${esc(a.fahrzeug || 'Fahrzeug?')} · <span class="cyan">${eur(preis(a))}</span></div>
     <div class="meta ellipsis">${esc(adresse(k) || 'Adresse fehlt')}${w ? ' · ' + w : ''}</div>
-    <div class="tags"><span class="badge b-${a.status}">${statusLabel(a.status)}</span>${k?.kanal ? `<span class="kanal">${kanal(k.kanal)[2]} ${kanal(k.kanal)[1]}</span>` : ''}${a.erinnert ? '<span class="kanal">✓ erinnert</span>' : ''}${konflikt ? '<span class="badge b-abgesagt">⚠ Schicht</span>' : ''}${opts.route && adresse(k) ? `<a class="btn sm route" href="${mapsLink(k)}" target="_blank" rel="noopener">📍 Route</a>` : ''}</div></div></div></div>`;
+    <div class="tags"><span class="badge b-${a.status}">${statusLabel(a.status)}</span>${k?.kanal ? `<span class="kanal">${kanal(k.kanal)[2]} ${kanal(k.kanal)[1]}</span>` : ''}${a.erinnert ? '<span class="kanal">✓ erinnert</span>' : ''}${konflikt ? '<span class="badge b-abgesagt">⚠ Arbeit</span>' : ''}${opts.route && adresse(k) ? `<a class="btn sm route" href="${mapsLink(k)}" target="_blank" rel="noopener">📍 Route</a>` : ''}</div></div></div></div>`;
 }
 VIEWS.start = () => {
   const h = new Date().getHours();
@@ -607,14 +606,14 @@ VIEWS.kalender = () => {
     const evs = byDay[s] || [];
     const sc = S().schicht.aktiv ? schichtFuer(s) : null;
     const frei = s >= todayIso() && freieLuecken(s).length;
-    cells += `<button data-act="calDay" data-v="${s}" class="${d.getMonth() !== calM ? 'out' : ''} ${s === todayIso() ? 'today' : ''} ${s === calSel ? 'sel' : ''} ${frei ? 'frei' : ''}">${d.getDate()}<span class="dots">${evs.slice(0, 3).map(a => `<i class="d-${a.status}"></i>`).join('')}</span>${sc && d.getDay() !== 0 ? `<small class="sh sh-${sc.typ}">${sc.typ === 'frueh' ? 'F' : sc.typ === 'spaet' ? 'S' : 'frei'}</small>` : ''}</button>`;
+    cells += `<button data-act="calDay" data-v="${s}" class="${d.getMonth() !== calM ? 'out' : ''} ${s === todayIso() ? 'today' : ''} ${s === calSel ? 'sel' : ''} ${frei ? 'frei' : ''}">${d.getDate()}<span class="dots">${evs.slice(0, 3).map(a => `<i class="d-${a.status}"></i>`).join('')}</span>${sc && d.getDay() !== 0 ? `<small class="sh sh-${sc.typ}">${sc.typ === 'arbeit' ? 'A' : 'frei'}</small>` : ''}</button>`;
   }
   const sel = (byDay[calSel] || []).sort(byDateAsc);
   const monthSum = db.auftraege.filter(a => monthKey(a.datum) === `${calY}-${pad(calM+1)}` && a.status !== 'abgesagt');
   return `<div class="cal-head"><button class="btn sm" data-act="calPrev">‹</button><b>${MONATE[calM]} ${calY}</b><button class="btn sm" data-act="calNext">›</button></div>
   <div class="cal">${cells}</div>
   <div class="meta" style="margin-top:8px">${monthSum.length} Termine in diesem Monat · ${eur(monthSum.reduce((s, a) => s + preis(a), 0))} geplant/gemacht</div>
-  ${S().schicht.aktiv ? `<div class="legend" style="margin-top:6px"><span><b>F</b> Frühschicht</span><span><b>S</b> Spätschicht</span><span><i style="background:var(--green);border-radius:50%"></i>freie Zeit</span></div>` : ''}
+  ${S().schicht.aktiv ? `<div class="legend" style="margin-top:6px"><span><b>A</b> Arbeit</span><span><i style="background:var(--green);border-radius:50%"></i>freie Zeit</span></div>` : ''}
   <div class="label">${esc(fmtDate(calSel, true))}</div>
   ${dayInfoHtml(calSel)}
   ${sel.length ? sel.map(a => terminItem(a, {route: calSel >= todayIso()})).join('') : '<div class="card muted">Keine Termine an diesem Tag.</div>'}
@@ -630,7 +629,7 @@ function freiKnopf(s, cls = ''){
   if (!S().schicht.aktiv || s < todayIso()) return '';
   const plan = schichtFuer(s, true); if (!plan || plan.typ === 'frei') return '';
   const frei = !!S().schicht.frei?.[s];
-  return `<button class="btn sm ${frei ? '' : 'pri'} ${cls}" data-act="freiTag" data-v="${s}">${frei ? '↺ Doch Schicht' : '🌴 Hab frei'}</button>`;
+  return `<button class="btn sm ${frei ? '' : 'pri'} ${cls}" data-act="freiTag" data-v="${s}">${frei ? '↺ Doch Arbeit' : '🌴 Hab frei'}</button>`;
 }
 function dayInfoHtml(s){
   const sc = S().schicht.aktiv ? schichtFuer(s) : null, w = wetterTxt(s, true), lk = freieLuecken(s);
@@ -848,7 +847,7 @@ function updateDraftUi(){
       const kollision = zeitM != null && sc && sc.von != null && zeitM < sc.bis + (S().puffer || 0) && endM > sc.von - (S().puffer || 0);
       const dunkel = endM != null && endM > sunset(draft.datum) + (S().lichtNach || 0);
       dh.innerHTML = [sc ? '🏬 ' + esc(sc.label) : '', w, '🌇 hell bis ' + fromMin(sunset(draft.datum) + (S().lichtNach || 0)),
-        kollision ? '<span class="red">⚠ überschneidet sich mit deiner Schicht</span>' : '', dunkel && !kollision ? `<span class="amber">⚠ Ende ca. ${fromMin(endM)}, dann ist es dunkel</span>` : '',
+        kollision ? '<span class="red">⚠ überschneidet sich mit deiner Arbeitszeit</span>' : '', dunkel && !kollision ? `<span class="amber">⚠ Ende ca. ${fromMin(endM)}, dann ist es dunkel</span>` : '',
         !draft.zeit && lk.length ? 'Frei: ' + lk.map(l => `<a href="#" data-act="setZeit" data-t="${fromMin(l[0])}">${fromMin(l[0])}–${fromMin(l[1])}</a>`).join(', ') : ''].filter(Boolean).join(' · ');
     } else dh.innerHTML = ''; }
   const sa = scoreAuto(draft), man = num(draft.scoreManuell);
@@ -1241,16 +1240,13 @@ function openSettings(){
   <div class="muted small" style="margin-bottom:6px">Anrede in Nachrichten an Kunden</div>
   <div class="seg"><button data-act="anrede" data-v="du" class="${s.anrede !== 'sie' ? 'on' : ''}">du</button><button data-act="anrede" data-v="sie" class="${s.anrede === 'sie' ? 'on' : ''}">Sie</button></div>
   <label class="f" style="margin-top:12px"><span>Google-Bewertungslink (kommt in die Bewertungsanfrage)</span><input data-set="googleReview" value="${esc(s.googleReview)}" placeholder="https://g.page/r/…" autocapitalize="off"></label>
-  <div class="label">Arbeitszeiten (Obi)</div>
-  <div class="card small"><div class="card-h"><span>Schichtplan für freie Lücken nutzen</span><button class="btn sm ${s.schicht.aktiv ? 'pri' : ''}" data-act="schichtToggle">${s.schicht.aktiv ? 'An' : 'Aus'}</button></div>
-  ${s.schicht.aktiv ? `<div class="muted" style="margin:6px 0">Wechsel jede Woche. Diese Woche: <b class="cyan">${schichtFuer(todayIso())?.typ === 'spaet' ? 'Spätschicht' : 'Frühschicht'}</b> · Freitag und Sonntag frei.</div>
-  <div class="row"><span>Früh Mo–Do</span><input class="inline-num" style="width:130px!important" data-sch="frueh.wd" value="${esc(s.schicht.frueh.wd)}"></div>
-  <div class="row"><span>Früh Samstag</span><input class="inline-num" style="width:130px!important" data-sch="frueh.sa" value="${esc(s.schicht.frueh.sa)}"></div>
-  <div class="row"><span>Spät Mo–Do</span><input class="inline-num" style="width:130px!important" data-sch="spaet.wd" value="${esc(s.schicht.spaet.wd)}"></div>
-  <div class="row"><span>Spät Samstag</span><input class="inline-num" style="width:130px!important" data-sch="spaet.sa" value="${esc(s.schicht.spaet.sa)}"></div>
-  <div class="btns"><button class="btn sm" data-act="schichtTausch">Diese Woche ist eigentlich ${schichtFuer(todayIso())?.typ === 'spaet' ? 'Früh' : 'Spät'}</button></div>
+  <div class="label">Arbeitszeiten</div>
+  <div class="card small"><div class="card-h"><span>Arbeitszeiten für freie Lücken nutzen</span><button class="btn sm ${s.schicht.aktiv ? 'pri' : ''}" data-act="schichtToggle">${s.schicht.aktiv ? 'An' : 'Aus'}</button></div>
+  ${s.schicht.aktiv ? `<div class="muted" style="margin:6px 0">Jede Woche gleich. ${s.schicht.sa ? 'Sonntag frei.' : 'Samstag und Sonntag frei.'} Feld leer lassen = frei.</div>
+  <div class="row"><span>Mo–Fr</span><input class="inline-num" style="width:130px!important" data-sch="wd" value="${esc(s.schicht.wd)}" placeholder="frei"></div>
+  <div class="row"><span>Samstag</span><input class="inline-num" style="width:130px!important" data-sch="sa" value="${esc(s.schicht.sa)}" placeholder="frei"></div>
   <div class="row"><span>Frühester Start</span><input class="inline-num" type="time" data-set="slotStart" value="${esc(s.slotStart)}"></div>
-  <div class="row"><span>Puffer vor/nach Schicht (Min.)</span><input class="inline-num" type="number" data-set="puffer" value="${esc(s.puffer)}"></div>
+  <div class="row"><span>Puffer vor/nach Arbeit (Min.)</span><input class="inline-num" type="number" data-set="puffer" value="${esc(s.puffer)}"></div>
   <div class="row"><span>Lücke mindestens (Std.)</span><input class="inline-num" type="number" step="0.5" data-set="minStd" value="${esc(s.minStd)}"></div>
   <div class="row"><span>Licht nach Sonnenuntergang (Min.)</span><input class="inline-num" type="number" data-set="lichtNach" value="${esc(s.lichtNach)}"></div>` : ''}</div>
   <div class="label">Benachrichtigungen</div>
@@ -1345,11 +1341,10 @@ const ACTIONS = {
   slotTermin: el => openAuftrag(null, {preset: {datum: el.dataset.v, zeit: el.dataset.t}}),
   schnellAngebot: () => openAuftrag(null, {title: 'Angebot erstellen', angebot: true}),
   freiTag: el => { const s = el.dataset.v, sc = S().schicht; sc.frei = sc.frei || {};
-    if (sc.frei[s]) { delete sc.frei[s]; toast('Schicht wieder eingetragen'); } else { sc.frei[s] = true; toast(`${s === todayIso() ? 'Heute' : fmtDate(s)} frei, Zeit ist jetzt verfügbar`); }
+    if (sc.frei[s]) { delete sc.frei[s]; toast('Arbeitszeit wieder eingetragen'); } else { sc.frei[s] = true; toast(`${s === todayIso() ? 'Heute' : fmtDate(s)} frei, Zeit ist jetzt verfügbar`); }
     for (const k of Object.keys(sc.frei)) if (k < todayIso(-60)) delete sc.frei[k];
     save(); go(null, true); },
   schichtToggle: () => { S().schicht.aktiv = !S().schicht.aktiv; save(); openSettings(); },
-  schichtTausch: () => { const sc = S().schicht; sc.refTyp = sc.refTyp === 'frueh' ? 'spaet' : 'frueh'; save(); openSettings(); toast('Schichtplan umgedreht'); },
   setZeit: el => { const f = $('#af'); f.elements.zeit.value = el.dataset.t; readDraftForm(); updateDraftUi(); },
   dRoute: () => { const k = collectKunde(); if (!adresse(k)) return toast('Erst Adresse eintragen'); openUrl(mapsLink(k)); },
   close: () => closeSheet(),
@@ -1465,7 +1460,7 @@ document.addEventListener('change', e => {
   const el = e.target;
   if (el.dataset.inp === 'kSort') { kSort = el.value; render(); }
   if (el.dataset.set) { const v = el.type === 'number' ? num(el.value) ?? 0 : el.value; S()[el.dataset.set] = v; save(); if (el.dataset.set !== 'profil') toast('Gespeichert'); if (el.dataset.set === 'apiKey' && $('#kiFrage')) openAssistent(); }
-  if (el.dataset.sch) { const [t, k] = el.dataset.sch.split('.'); const v = el.value.replace(/\s/g, '').replace(/–/g, '-'); if (!/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/.test(v) && v !== '') return toast('Format: 08:00-17:00'); S().schicht[t][k] = v; save(); toast('Gespeichert'); }
+  if (el.dataset.sch) { const v = el.value.replace(/\s/g, '').replace(/–/g, '-'); if (!/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/.test(v) && v !== '') return toast('Format: 08:00-16:30'); S().schicht[el.dataset.sch] = v; save(); toast('Gespeichert'); }
   if (el.dataset.price) { const p = el.dataset.price.split('.'), n = num(el.value) || 0, s = S();
     if (p[0] === 'p') s.pakete[+p[1]].preise[p[2]] = n; else if (p[0] === 'e') s.extras[+p[1]].preis = n; else if (p[0] === 'a') s.aufwand[+p[1]].preis = n;
     save(); toast('Preis gespeichert'); }
