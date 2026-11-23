@@ -1489,7 +1489,15 @@ document.addEventListener('touchstart', () => {}, {passive: true});
 /* ---------------- PWA ---------------- */
 let deferredPrompt = null;
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; });
-if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  // Neue Version: sobald der neue Service Worker übernimmt, einmal neu laden. Beim Zurückkehren in die App nach Updates schauen.
+  const hatteSW = !!navigator.serviceWorker.controller; let neuGeladen = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hatteSW && !neuGeladen) { neuGeladen = true; location.reload(); } });
+  navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).then(reg => {
+    reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch(() => {});
+}
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkNotifs(); if (!$('#sheet').classList.contains('open')) render(); } });
 setInterval(checkNotifs, 60e3);
 

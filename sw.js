@@ -1,5 +1,5 @@
 // Offline-Cache für die 92 App. Bei jedem Update VERSION hochzählen.
-const VERSION = '92app-v1.2.0';
+const VERSION = '92app-v1.2.1';
 const FILES = ['./', './index.html', './app.js', './styles.css', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png',
   './icons/logo.png', './icons/logo-mark.png', './icons/splash-1206x2622.png',
@@ -13,17 +13,19 @@ self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
-// App-Dateien: sofort aus dem Cache (schneller Start), im Hintergrund aktualisieren.
+// Code (HTML/JS/CSS): erst Netz (max. 3 Sek.), damit Updates sofort ankommen; offline aus dem Cache.
+// Bilder und Schriften: aus dem Cache, im Hintergrund aktualisieren.
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  const code = e.request.mode === 'navigate' || /\.(js|css|html|webmanifest)$/.test(url.pathname) || url.pathname.endsWith('/');
   e.respondWith(caches.open(VERSION).then(async c => {
-    const hit = await c.match(e.request, {ignoreSearch: true});
-    const net = fetch(e.request).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; }).catch(() => null);
-    return hit || (await net) || c.match('./index.html');
+    const net = fetch(e.request, {cache: 'no-cache'}).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; }).catch(() => null);
+    const hit = () => c.match(e.request, {ignoreSearch: true});
+    if (code) {
+      const r = await Promise.race([net, new Promise(res => setTimeout(() => res(null), 3000))]);
+      return r || (await hit()) || (await net) || c.match('./index.html');
+    }
+    return (await hit()) || (await net) || c.match('./index.html');
   }));
-});
-self.addEventListener('notificationclick', e => {
-  e.notification.close();
-  e.waitUntil(self.clients.matchAll({type: 'window'}).then(cl => cl.length ? cl[0].focus() : self.clients.openWindow('./')));
 });
